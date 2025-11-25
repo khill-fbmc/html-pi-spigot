@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Pi Digits Streaming in a Circle</title>
+
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.21.0/dist/lil-gui.umd.js"></script>
+    <script>
+      function* createPiGenerator() {
+        let q = 1n,
+          r = 0n,
+          t = 1n,
+          k = 1n,
+          n = 3n,
+          l = 3n;
+        while (true) {
+          if (4n * q + r - t < n * t) {
+            const digit = Number(n);
+            yield digit;
+
+            const nr = 10n * (r - n * t);
+            n = (10n * (3n * q + r)) / t - 10n * n;
+            q = 10n * q;
+            r = nr;
+          } else {
+            const nr = (2n * q + r) * l;
+            const nn = (q * (7n * k) + 2n + r * l) / (t * l);
+            q = q * k;
+            t = t * l;
+            l = l + 2n;
+            k = k + 1n;
+            n = nn;
+            r = nr;
+          }
+        }
+      }
+    </script>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/lil-gui@0.21.0/dist/lil-gui.min.css" />
+
+    <style>
+      body,
+      html {
+        margin: 0;
+        height: 100%;
+        background: #0b0d12;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+      .lil-gui {
+        --background-color: rgba(15, 18, 26, 0.9);
+        --title-background-color: rgba(20, 24, 34, 0.95);
+        --text-color: #e7ecff;
+        --font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+
+    <script>
+      /* Canvas setup */
+      const canvas = document.getElementById("c");
+      const ctx = canvas.getContext("2d");
+
+      function resize() {
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.floor(innerWidth * dpr);
+        canvas.height = Math.floor(innerHeight * dpr);
+        canvas.style.width = innerWidth + "px";
+        canvas.style.height = innerHeight + "px";
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      }
+      addEventListener("resize", resize);
+      resize();
+
+      /* Animation state */
+      const gen = createPiGenerator();
+      const digits = []; // {ch, angle, alpha, age}
+      let started = false;
+      /* Defaults (single source of truth) */
+      const DEFAULTS = {
+        streamSpeed: Math.PI / 4,
+        addRate: 8,
+        fadePerSec: 0.1,
+        maxDigits: 400,
+        shrinkRate: 0.4,
+        startSizeMult: 3.0,
+        minSizeMult: 0.2,
+        radiusFactor: 0.32,
+        showGuide: true,
+      };
+
+      /* Tunable params (GUI controls these) */
+      const params = {
+        ...DEFAULTS,
+        reset: () => {
+          // 1) reset animation state
+          digits.length = 0;
+          started = false;
+          addAccumulator = 0;
+          lastTime = performance.now();
+
+          // 2) reset params back to defaults
+          Object.assign(params, DEFAULTS);
+
+          // 3) update all GUI sliders/toggles to match params
+          gui.controllersRecursive().forEach((c) => c.updateDisplay());
+        },
+      };
+
+      /* lil-gui setup */
+      const gui = new lil.GUI({ title: "Pi Stream Controls" });
+
+      const animFolder = gui.addFolder("Animation");
+      animFolder
+        .add(params, "streamSpeed", -6.283, 6.283, 0.01)
+        .name("Stream speed");
+      animFolder.add(params, "addRate", 0, 60, 0.1).name("Digits/sec");
+      animFolder.add(params, "fadePerSec", 0, 1, 0.005).name("Fade/sec");
+      animFolder.add(params, "maxDigits", 50, 2000, 1).name("Max digits");
+      animFolder
+        .add(params, "radiusFactor", 0.1, 0.6, 0.005)
+        .name("Circle radius");
+      animFolder.add(params, "showGuide").name("Show guide");
+      animFolder.open();
+
+      const sizeFolder = gui.addFolder("Size / Shrink");
+      sizeFolder.add(params, "startSizeMult", 0.5, 6, 0.05).name("Start size");
+      sizeFolder.add(params, "minSizeMult", 0.05, 2, 0.01).name("Min size");
+      sizeFolder.add(params, "shrinkRate", 0.01, 5, 0.01).name("Shrink rate");
+      sizeFolder.open();
+
+      gui.add(params, "reset").name("Reset stream");
+
+      /* Animation timing */
+      let lastTime = performance.now();
+      let addAccumulator = 0;
+
+      function pushChar(ch) {
+        digits.push({
+          ch,
+          angle: -Math.PI / 2,
+          alpha: 1,
+          age: 0,
+        });
+      }
+
+      function addDigit() {
+        const d = gen.next().value;
+        if (!started) {
+          pushChar(String(d));
+          pushChar(".");
+          started = true;
+        } else {
+          pushChar(String(d));
+        }
+
+        // enforce cap from GUI
+        if (digits.length > params.maxDigits) {
+          digits.splice(0, digits.length - params.maxDigits);
+        }
+      }
+
+      function draw(dt) {
+        const w = innerWidth,
+          h = innerHeight;
+        const cx = w / 2,
+          cy = h / 2;
+        const radius = Math.min(w, h) * params.radiusFactor;
+
+        // background
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = "#0b0d12";
+        ctx.fillRect(0, 0, w, h);
+
+        // subtle circle guide
+        if (params.showGuide) {
+          ctx.beginPath();
+          ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+          ctx.strokeStyle = "rgba(140,160,220,0.08)";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
+        // update digit positions, fade, and age
+        for (const obj of digits) {
+          obj.angle += params.streamSpeed * dt;
+          obj.alpha = Math.max(0, obj.alpha - params.fadePerSec * dt);
+          obj.age += dt;
+        }
+        while (digits.length && digits[0].alpha <= 0.001) digits.shift();
+
+        // base font size reference
+        const baseFont = Math.max(16, radius * 0.12);
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+
+        for (const obj of digits) {
+          const x = cx + radius * Math.cos(obj.angle);
+          const y = cy + radius * Math.sin(obj.angle);
+
+          // shrink multiplier: starts big, falls toward min size
+          const shrinkMult =
+            params.minSizeMult +
+            (params.startSizeMult - params.minSizeMult) *
+              Math.exp(-obj.age * params.shrinkRate);
+
+          const fontSize = baseFont * shrinkMult;
+
+          ctx.save();
+          ctx.translate(x, y);
+          ctx.font = `${fontSize}px system-ui, -apple-system, Segoe UI, Roboto, sans-serif`;
+
+          ctx.fillStyle = `rgba(230,240,255,${obj.alpha})`;
+          ctx.shadowColor = `rgba(120,160,255,${0.6 * obj.alpha})`;
+          ctx.shadowBlur = 12 * obj.alpha;
+
+          ctx.fillText(obj.ch, 0, 0);
+          ctx.restore();
+        }
+
+        // center label
+        ctx.fillStyle = "rgba(200,210,235,0.7)";
+        ctx.font = `${Math.max(14, radius * 0.06)}px system-ui, sans-serif`;
+        ctx.fillText("π digits (spigot stream)", cx, cy);
+      }
+
+      function loop(now) {
+        const dt = (now - lastTime) / 1000;
+        lastTime = now;
+
+        // add digits at current GUI rate
+        addAccumulator += dt * params.addRate;
+        while (addAccumulator >= 1) {
+          addDigit();
+          addAccumulator -= 1;
+        }
+
+        draw(dt);
+        requestAnimationFrame(loop);
+      }
+
+      requestAnimationFrame(loop);
+    </script>
+  </body>
+</html>
